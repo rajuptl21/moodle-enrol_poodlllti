@@ -42,118 +42,152 @@ if (empty($messagelaunch)) {
     throw new moodle_exception('Bad Launch');
 }
 
-// 1. Authenticate (created user sessions)
-// We use enrol_lti auth logic but we need to handle the redirection loop ourselves if not logged in
-$auth = get_auth_plugin('lti');
-
-// Helper to check if we are already logged in as the correct user?
-// auth_lti::complete_login handles this.
-// But we need to preserve 'modid' if it was passed.
-// Wait, 'modid' passed in the Deep Link custom params will be in $messagelaunch->getLaunchData()['https://purl.imsglobal.org/spec/lti/claim/custom']['modid']
-
+// 1. Extract LTI Identification Data
 $launchdata = $messagelaunch->getLaunchData();
+$deploymentid = $launchdata['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] ?? null;
+$context = $launchdata['https://purl.imsglobal.org/spec/lti/claim/context'] ?? [];
+$contextid = $context['id'] ?? null;
+$resourcelink = $launchdata['https://purl.imsglobal.org/spec/lti/claim/resource_link'] ?? [];
+$resourceid = $resourcelink['id'] ?? null;
 $customparams = $launchdata['https://purl.imsglobal.org/spec/lti/claim/custom'] ?? [];
-if (empty($modid)) {
-    if (isset($customparams['modid'])) {
-        $modid = $customparams['modid'];
-    } else if (isset($customparams['id'])) {
-        // Fallback: Find modid via Tool UUID (standard for Moodle LTI 1.3 Tools)
-        $resourceuuid = $customparams['id'];
-        $resource = array_values(\enrol_lti\helper::get_lti_tools(['uuid' => $resourceuuid]));
-        $resource = $resource[0] ?? null;
-        if ($resource && $resource->contextid) {
-            $context = context::instance_by_id($resource->contextid);
-            if ($context->contextlevel == CONTEXT_MODULE) {
-                $modid = $context->instanceid;
-            }
-        }
+$sectionid = $customparams['section_id'] ?? null;
+
+if (!$deploymentid || !$contextid || !$resourceid) {
+    throw new moodle_exception('Missing required LTI launch parameters (deployment_id, context_id, or resource_id)');
+}
+
+// 2. Find/Provision Category
+$category = $DB->get_record('course_categories', ['idnumber' => $deploymentid]);
+if (!$category) {
+    throw new moodle_exception('Tenant category not found for deployment ID: ' . s($deploymentid));
+}
+
+// 3. Find/Provision Course
+$coursetargetidnumber = $deploymentid . ':' . $contextid;
+$course = $DB->get_record('course', ['idnumber' => $coursetargetidnumber]);
+
+if (!$course) {
+    // Try to find a course from the "Pool" in this category
+    $sql = "SELECT * FROM {course} 
+             WHERE category = :category 
+               AND (idnumber IS NULL OR idnumber = '')
+             ORDER BY sortorder ASC";
+    $poolcourse = $DB->get_record_sql($sql, ['category' => $category->id], IGNORE_MULTIPLE);
+    
+    if (!$poolcourse) {
+        throw new moodle_exception('No available pool course found in category: ' . s($category->name));
+    }
+    
+    // Claim the pool course
+    $poolcourse->idnumber = $coursetargetidnumber;
+    $poolcourse->fullname = $context['title'] ?? ('Course ' . $contextid);
+    $poolcourse->shortname = $context['label'] ?? $poolcourse->idnumber;
+    $DB->update_record('course', $poolcourse);
+    $course = $poolcourse;
+}
+
+// 4. Find/Provision Activity
+// The activity is identified by its CM idnumber = resourceid
+$modid = $customparams['modid'] ?? optional_param('modid', 0, PARAM_INT);
+$cm = $DB->get_record('course_modules', ['course' => $course->id, 'idnumber' => $resourceid]);
+
+if (!$cm && $modid) {
+    // Attempt to find by modid if idnumber not yet set (common in first launch after deep link)
+    $cm = $DB->get_record('course_modules', ['id' => $modid, 'course' => $course->id]);
+    if ($cm && (empty($cm->idnumber) || $cm->idnumber == $resourceid)) {
+        // Seal the mapping
+        $DB->set_field('course_modules', 'idnumber', $resourceid, ['id' => $cm->id]);
+    } else {
+        $cm = null; // Don't trust it if it belongs to another resource
     }
 }
 
-if (empty($modid)) {
-    throw new moodle_exception('No module ID provided in launch.');
+if (!$cm) {
+    // TRIGGER CLONING LOGIC
+    require_once(__DIR__ . '/clonelib.php');
+    $cmid = poodlllti_find_and_clone_activity($resourceid, $course->id);
+    if (!$cmid) {
+        throw new moodle_exception('Activity not found and could not be cloned for resource ID: ' . s($resourceid));
+    }
+    $cm = get_coursemodule_from_id('', $cmid, 0, false, MUST_EXIST);
 }
 
-// URL to return to after auth (this script)
+// 5. Authenticate
+$auth = get_auth_plugin('lti');
 $returnurl = new moodle_url('/enrol/poodlllti/launch.php', ['launchid' => $messagelaunch->getLaunchId()]);
 
 $auth->complete_login(
     $launchdata,
     $returnurl,
-    auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY // Or AUTO if we want to auto-create users
+    auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY
 );
 
 require_login(null, false);
+global $USER;
 
-// 2. Enrolment Logic
-// We need to ensure the user is enrolled in the course containing $modid
-$cm = get_coursemodule_from_id('', $modid, 0, false, MUST_EXIST);
-$course = $DB->get_record('course', ['id' => $cm->course], '*', MUST_EXIST);
-
-// Check if enrolled
-if (!is_enrolled(context_course::instance($course->id), $USER->id)) {
-    // Enrol them using enrol_poodlllti instance
-    // We must find the SPECIFIC instance for this module context
-    $enrol = enrol_get_plugin('poodlllti');
-    $modcontext = context_module::instance($cm->id);
-    
-    $sql = "SELECT e.*, t.roleinstructor, t.rolelearner
-              FROM {enrol} e
-              JOIN {enrol_lti_tools} t ON t.enrolid = e.id
-             WHERE e.enrol = :enrol 
-               AND t.contextid = :contextid";
-    $params = [
-        'enrol' => 'poodlllti',
-        'contextid' => $modcontext->id
-    ];
-    $instance = $DB->get_record_sql($sql, $params);
-    
-    if (!$instance) {
-         // This shouldn't happen if they linked correctly, but as a fallback:
-         $instanceid = $enrol->add_instance($course, ['contextid' => $modcontext->id]);
-         $instance = $DB->get_record_sql($sql, $params);
+// 6. Group Management
+if ($sectionid) {
+    $groupid = null;
+    $group = $DB->get_record('groups', ['courseid' => $course->id, 'idnumber' => $sectionid]);
+    if (!$group) {
+        // Create group
+        $groupdata = new stdClass();
+        $groupdata->courseid = $course->id;
+        $groupdata->idnumber = $sectionid;
+        $groupdata->name = $customparams['section_title'] ?? ('Section ' . $sectionid);
+        $groupid = groups_create_group($groupdata);
+    } else {
+        $groupid = $group->id;
     }
     
-    if ($instance) {
-        // Determine role based on LTI roles
-        $ltiroles = $launchdata['https://purl.imsglobal.org/spec/lti/claim/roles'] ?? [];
-        $isinstructor = false;
-        foreach ($ltiroles as $role) {
-            if (strpos($role, 'Membership#Instructor') !== false || strpos($role, 'system/person#Administrator') !== false) {
-                $isinstructor = true;
-                break;
-            }
-        }
-        $roleid = $isinstructor ? $instance->roleinstructor : $instance->rolelearner;
-        
-        // Force enrolment with the correct role
-        $enrol->enrol_user($instance, $USER->id, $roleid);
-    }
-} else {
-    // Even if enrolled, confirm they have the correct role (or just re-call enrol_user which is safe)
-    $enrol = enrol_get_plugin('poodlllti');
-    $modcontext = context_module::instance($cm->id);
-    $sql = "SELECT e.*, t.roleinstructor, t.rolelearner
-              FROM {enrol} e
-              JOIN {enrol_lti_tools} t ON t.enrolid = e.id
-             WHERE e.enrol = :enrol 
-               AND t.contextid = :contextid";
-    $params = ['enrol' => 'poodlllti', 'contextid' => $modcontext->id];
-    $instance = $DB->get_record_sql($sql, $params);
-    
-    if ($instance) {
-        $ltiroles = $launchdata['https://purl.imsglobal.org/spec/lti/claim/roles'] ?? [];
-        $isinstructor = false;
-        foreach ($ltiroles as $role) {
-            if (strpos($role, 'Membership#Instructor') !== false || strpos($role, 'system/person#Administrator') !== false) {
-                $isinstructor = true;
-                break;
-            }
-        }
-        $roleid = $isinstructor ? $instance->roleinstructor : $instance->rolelearner;
-        $enrol->enrol_user($instance, $USER->id, $roleid);
+    if ($groupid && !groups_is_member($groupid, $USER->id)) {
+        groups_add_member($groupid, $USER->id);
     }
 }
 
-// 3. Redirect to Activity
+// 7. Enrolment Logic (specific to the CM)
+$enrol = enrol_get_plugin('poodlllti');
+$modcontext = context_module::instance($cm->id);
+
+$sql = "SELECT e.*, t.roleinstructor, t.rolelearner
+          FROM {enrol} e
+          JOIN {enrol_lti_tools} t ON t.enrolid = e.id
+         WHERE e.enrol = :enrol 
+           AND t.contextid = :contextid";
+$params = ['enrol' => 'poodlllti', 'contextid' => $modcontext->id];
+$instance = $DB->get_record_sql($sql, $params);
+
+if (!$instance) {
+    // Create new instance for this CM
+    $lticonfig = get_config('enrol_lti');
+    global $SITE;
+    $fields = [
+        'contextid' => $modcontext->id,
+        'institution' => $lticonfig->institution ?? $SITE->fullname,
+        'city' => $lticonfig->city ?? $CFG->defaultcity ?? '',
+        'country' => $lticonfig->country ?? $CFG->country ?? 'AU',
+        'roleinstructor' => 3,
+        'rolelearner' => 5,
+        'roleid' => 5,
+        'provisioningmodeinstructor' => auth_plugin_lti::PROVISIONING_MODE_PROMPT_NEW_EXISTING,
+        'provisioningmodelearner' => auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY
+    ];
+    $enrolid = $enrol->add_instance($course, $fields);
+    $instance = $DB->get_record_sql($sql, $params);
+}
+
+if ($instance) {
+    $ltiroles = $launchdata['https://purl.imsglobal.org/spec/lti/claim/roles'] ?? [];
+    $isinstructor = false;
+    foreach ($ltiroles as $role) {
+        if (stripos($role, 'membership#Instructor') !== false || stripos($role, 'system/person#Administrator') !== false) {
+            $isinstructor = true;
+            break;
+        }
+    }
+    $roleid = $isinstructor ? $instance->roleinstructor : $instance->rolelearner;
+    $enrol->enrol_user($instance, $USER->id, $roleid);
+}
+
+// 8. Redirect to Activity
 redirect(new moodle_url('/mod/minilesson/view.php', ['id' => $cm->id]));
