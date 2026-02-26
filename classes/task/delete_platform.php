@@ -25,6 +25,7 @@ use enrol_lti\local\ltiadvantage\repository\resource_link_repository;
 use enrol_lti\local\ltiadvantage\repository\user_repository;
 use enrol_lti\local\ltiadvantage\service\application_registration_service;
 use enrol_poodlllti\util;
+use Exception;
 
 /**
  * Class delete_platform
@@ -36,7 +37,7 @@ use enrol_poodlllti\util;
 class delete_platform extends adhoc_task {
 
     public function get_name() {
-        return get_string('deleteplatform', util::COMPONENT);
+        return get_string('deleteplatformtask', util::COMPONENT);
     }
 
     public function execute() {
@@ -76,9 +77,15 @@ class delete_platform extends adhoc_task {
                 delete_course($course);
             }
 
-            $category = core_course_category::get($platformdata->categoryid);
-            $category->delete_full();
-            mtrace('Platform Course and Categoty deleted successfully');
+            try {
+                $category = core_course_category::get($platformdata->categoryid);
+                $category->delete_full(false);
+                mtrace('Platform Course and Categoty deleted successfully');
+            } catch (Exception $e) {
+                mtrace('Error deleting categoryid --> ' . $platformdata->categoryid);
+                $exinfo = get_exception_info($e);
+                mtrace('error --> ' . $exinfo->message);
+            }
         }
 
         $DB->delete_records('enrol_poodlllti_clients', ['id' => $platformdata->id]);

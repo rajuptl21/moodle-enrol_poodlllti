@@ -199,7 +199,8 @@ if (!empty($draftreg) && !empty($toolconfig)) {
                 customdata: ['client' => $client],
             );
             $form->assign_category((object) [
-                'deploymentid' => $deployment->get_id(),
+                'id' => $client->get('id'),
+                'deploymentid' => $deployment->get_deploymentid(),
             ]);
             $client->upsert();
         }

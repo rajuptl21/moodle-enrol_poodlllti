@@ -17,16 +17,9 @@
 namespace enrol_poodlllti;
 
 use context_system;
-use enrol_lti\local\ltiadvantage\repository\application_registration_repository;
-use enrol_lti\local\ltiadvantage\repository\context_repository;
-use enrol_lti\local\ltiadvantage\repository\deployment_repository;
-use enrol_lti\local\ltiadvantage\repository\resource_link_repository;
-use enrol_lti\local\ltiadvantage\repository\user_repository;
-use enrol_lti\local\ltiadvantage\service\application_registration_service;
-use enrol_poodlllti\task\delete_platform;
 use core\task\manager;
+use enrol_poodlllti\task\delete_platform;
 use lang_string;
-use stdClass;
 
 /**
  * Class util
@@ -48,26 +41,6 @@ class util {
     ];
 
     const PERPAGE = 30;
-
-    /**
-     * Register a new platform.
-     * @param mixed $platformname
-     * @return void
-     */
-    public static function register_platform($platformname) {
-
-        $regservice = new application_registration_service(
-            new application_registration_repository(),
-            new deployment_repository(),
-            new resource_link_repository(),
-            new context_repository(),
-            new user_repository()
-        );
-
-        $draftapplication = new stdClass();
-        $draftapplication->name = $platformname;
-        $regservice->create_draft_application_registration($draftapplication);
-    }
 
     public static function get_prefilled_data_by_platform(string $platformtype, string $platformurl): array {
         $platformurl = rtrim($platformurl, '/');
