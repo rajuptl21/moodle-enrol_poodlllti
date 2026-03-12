@@ -16,7 +16,12 @@
 
 namespace enrol_poodlllti\local;
 
+use core\di;
 use core\persistent;
+use enrol_lti\local\ltiadvantage\entity\application_registration;
+use enrol_lti\local\ltiadvantage\entity\deployment;
+use enrol_lti\local\ltiadvantage\repository\application_registration_repository;
+use enrol_lti\local\ltiadvantage\repository\deployment_repository;
 use enrol_poodlllti\util;
 
 /**
@@ -67,6 +72,18 @@ class platform extends persistent {
             $this->create();
         }
         return $this;
+    }
+
+    public function get_app(): ?application_registration {
+        $apprepo = di::get(application_registration_repository::class);
+        $appregid = $this->get('ltiappregid');
+        return $apprepo->find($appregid);
+    }
+
+    public function get_app_deployment(): ?deployment {
+        $deploymentreg = di::get(deployment_repository::class);
+        $appdeploymentid = $this->get('ltideploymentid');
+        return $deploymentreg->find($appdeploymentid);
     }
 
 }

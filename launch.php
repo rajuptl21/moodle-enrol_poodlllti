@@ -7,13 +7,25 @@ use enrol_lti\local\ltiadvantage\lib\lti_cookie;
 use enrol_lti\local\ltiadvantage\lib\launch_cache_session;
 use enrol_lti\local\ltiadvantage\lib\issuer_database;
 use enrol_lti\local\ltiadvantage\repository\application_registration_repository;
+use enrol_lti\local\ltiadvantage\repository\context_repository;
 use enrol_lti\local\ltiadvantage\repository\deployment_repository;
+use enrol_lti\local\ltiadvantage\repository\resource_link_repository;
+use enrol_lti\local\ltiadvantage\repository\user_repository;
+use enrol_lti\local\ltiadvantage\service\tool_launch_service;
+use enrol_lti\local\ltiadvantage\utility\message_helper;
+use Packback\Lti1p3\LtiConstants;
 use Packback\Lti1p3\LtiMessageLaunch;
 use Packback\Lti1p3\LtiServiceConnector;
 
 // Check if enabled
 if (!enrol_is_enabled('poodlllti')) {
     throw new moodle_exception('enrolisdisabled', 'enrol_poodlllti');
+}
+
+// Dependent on enrol_lti being capable of processing checks
+if (!is_enabled_auth('lti')) {
+    // We reuse auth_lti for the heavy lifting of authentication
+   throw new moodle_exception('pluginnotenabled', 'auth', '', get_string('pluginname', 'auth_lti'));
 }
 
 $idtoken = optional_param('id_token', null, PARAM_RAW);
@@ -42,18 +54,41 @@ if (empty($messagelaunch)) {
     throw new moodle_exception('Bad Launch');
 }
 
+if ($messagelaunch->isDeepLinkLaunch()) {
+    // Authenticate the instructor using standard LTI auth
+    // We point the return URL to THIS script
+    $url = new moodle_url('/enrol/poodlllti/launch.php', ['launchid' => $messagelaunch->getLaunchId()]);
+    $auth = get_auth_plugin('lti');
+    $auth->complete_login(
+        $messagelaunch->getLaunchData(),
+        $url,
+        auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY // Or AUTO if we want to auto-create users
+    );
+
+    // If we are here, authentication passed
+    require_login(null, false);
+    global $USER;
+
+    // NOW: Redirect to mod/minilesson/ltistart.php
+    // We pass the launchid so ltistart.php can hydrate the launch object
+    $redirecturl = new moodle_url('/mod/minilesson/ltistart.php', ['launchid' => $messagelaunch->getLaunchId()]);
+    redirect($redirecturl);
+
+    exit;
+}
+
 // 1. Extract LTI Identification Data
 $launchdata = $messagelaunch->getLaunchData();
-$deploymentid = $launchdata['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] ?? null;
+$deploymentid = $launchdata[LtiConstants::DEPLOYMENT_ID] ?? null;
 $iss = $launchdata['iss'] ?? null;
 $aud = $launchdata['aud'] ?? null;
 $clientid = is_array($aud) ? reset($aud) : $aud;
 
-$context = $launchdata['https://purl.imsglobal.org/spec/lti/claim/context'] ?? [];
+$context = $launchdata[LtiConstants::CONTEXT] ?? [];
 $contextid = $context['id'] ?? null;
-$resourcelink = $launchdata['https://purl.imsglobal.org/spec/lti/claim/resource_link'] ?? [];
+$resourcelink = $launchdata[LtiConstants::RESOURCE_LINK] ?? [];
 $resourceid = $resourcelink['id'] ?? null;
-$customparams = $launchdata['https://purl.imsglobal.org/spec/lti/claim/custom'] ?? [];
+$customparams = $launchdata[LtiConstants::CUSTOM] ?? [];
 $sectionid = $customparams['section_id'] ?? null;
 
 if (!$deploymentid || !$contextid || !$resourceid || !$iss || !$clientid) {
@@ -174,28 +209,26 @@ if (!$instance) {
         'institution' => $lticonfig->institution ?? get_site()->fullname,
         'city' => $lticonfig->city ?? $CFG->defaultcity ?? '',
         'country' => $lticonfig->country ?? $CFG->country ?? 'AU',
-        'roleinstructor' => $instructorroleid,
-        'rolelearner' => $learnerroleid,
-        'roleid' => $learnerroleid,
-        'provisioningmodeinstructor' => auth_plugin_lti::PROVISIONING_MODE_PROMPT_NEW_EXISTING,
-        'provisioningmodelearner' => auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY
     ];
-    $enrolid = $enrol->add_instance($course, $fields);
+    $enrolid = $enrol->add_default_instance($course, $fields);
     $instance = $DB->get_record_sql($sql, $params);
 }
 
 if ($instance) {
-    $ltiroles = $launchdata['https://purl.imsglobal.org/spec/lti/claim/roles'] ?? [];
-    $isinstructor = false;
-    foreach ($ltiroles as $role) {
-        if (stripos($role, 'membership#Instructor') !== false || stripos($role, 'system/person#Administrator') !== false) {
-            $isinstructor = true;
-            break;
-        }
-    }
+    $ltiroles = $launchdata[LtiConstants::ROLES] ?? [];
+    $isinstructor = message_helper::is_instructor_launch($launchdata);
     $roleid = $isinstructor ? $instance->roleinstructor : $instance->rolelearner;
     $enrol->enrol_user($instance, $USER->id, $roleid);
 }
+
+$toollaunchservice = new tool_launch_service(
+    new deployment_repository(),
+    new application_registration_repository(),
+    new resource_link_repository(),
+    new user_repository(),
+    new context_repository()
+);
+[$userid, $resource] = $toollaunchservice->user_launches_tool($USER, $messagelaunch);
 
 // 8. Redirect to Activity
 redirect(new moodle_url('/mod/minilesson/view.php', ['id' => $cm->id]));

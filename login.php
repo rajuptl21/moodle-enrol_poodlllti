@@ -29,8 +29,6 @@ use enrol_lti\local\ltiadvantage\lib\launch_cache_session;
 use enrol_lti\local\ltiadvantage\repository\application_registration_repository;
 use enrol_lti\local\ltiadvantage\repository\deployment_repository;
 use Packback\Lti1p3\LtiOidcLogin;
-use Packback\Lti1p3\LtiServiceConnector;
-use core\http_client;
 
 require_once(__DIR__."/../../config.php");
 
@@ -43,7 +41,6 @@ $ltimessagehint = optional_param('lti_message_hint', null, PARAM_RAW);
 // Whitelist the Poodll LTI endpoints.
 $validuris = [
     (new moodle_url('/enrol/poodlllti/launch.php'))->out(false),
-    (new moodle_url('/enrol/poodlllti/launch_deeplink.php'))->out(false)
 ];
 
 if (!in_array($targetlinkuri, $validuris)) {

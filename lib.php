@@ -45,15 +45,19 @@ class enrol_poodlllti_plugin extends enrol_lti_plugin {
         return has_capability('enrol/poodlllti:config', $context);
     }
 
-    public function add_default_instance($course) {
+    public function add_default_instance($course, array $field = []) {
         $context = context_course::instance($course->id);
         $instructorroleid = key(get_archetype_roles('editingteacher'));
         $learnerroleid = key(get_archetype_roles('student'));
 
-        $field = [
+        $field += [
             'contextid' => $context->id,
             'roleinstructor' => $instructorroleid,
             'rolelearner' => $learnerroleid,
+            'roleid' => $learnerroleid,
+            'provisioningmodeinstructor' => auth_plugin_lti::PROVISIONING_MODE_PROMPT_NEW_EXISTING,
+            'provisioningmodelearner' => auth_plugin_lti::PROVISIONING_MODE_AUTO_ONLY,
+            'gradesync' => 1,
         ];
         return $this->add_instance($course, $field);
     }
