@@ -124,15 +124,11 @@ class edit extends dynamic_form {
     }
 
     public function get_app(): ?application_registration {
-        $apprepo = di::get(application_registration_repository::class);
-        $appregid = $this->client->get('ltiappregid');
-        return $apprepo->find($appregid);
+        return $this->client->get_app();
     }
 
     public function get_app_deployment(): ?deployment {
-        $deploymentreg = di::get(deployment_repository::class);
-        $appdeploymentid = $this->client->get('ltideploymentid');
-        return $deploymentreg->find($appdeploymentid);
+        return $this->client->get_app_deployment();
     }
 
     public function update_app(object $formdata): self {
@@ -328,40 +324,65 @@ class edit extends dynamic_form {
             $mform->addElement('html', $platformname);
 
             $registration = $this->get_app();
+            if ($registration) {
+                $platformtype = $this->client->get('platformtype');
+                if ($platformtype == util::PLATFORMTYPES['canvas']) {
+                    $jsonurl = $CFG->wwwroot . '/enrol/poodlllti/json.php?id=' . $this->client->get('id');
+                    $payload = util::get_public_json_payload($this->client);
+                    $canvastemplatecontext['manual_registration_urls'] = [
+                        [
+                            'name' => get_string('jsonurl', 'enrol_poodlllti'),
+                            'url' => $jsonurl,
+                            'id' => uniqid()
+                        ],
+                        [
+                            'name' => get_string('json', 'enrol_poodlllti'),
+                            'url' => json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT),
+                            'id' => uniqid(),
+                            'islongtext' => true,
+                            'rows' => 10,
+                        ],
+
+                    ];
+                    $mform->addElement('html', $OUTPUT->render_from_template(
+                        'enrol_poodlllti/tool_details',
+                        $canvastemplatecontext
+                    ));
+                    $mform->addElement('header', 'advanced', get_string('advanced'));
+                    $mform->setExpanded('advanced', false);
+                }
+            }
+
             $templatecontext['manual_registration_urls'] = [
                 [
                     'name' => get_string('registrationurl', 'enrol_lti'),
                     'url' => $CFG->wwwroot . '/enrol/poodlllti/register.php?token=' . $registration->get_uniqueid(),
-                    'id' => uniqid()
+                    'id' => uniqid(),
                 ],
                 [
                     'name' => get_string('toolurl', 'enrol_lti'),
                     'url' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
-                    'id' => uniqid()
+                    'id' => uniqid(),
                 ],
                 [
                     'name' => get_string('jwksurl', 'enrol_poodlllti'),
                     'url' => $CFG->wwwroot . '/enrol/lti/jwks.php',
-                    'id' => uniqid()
+                    'id' => uniqid(),
                 ],
                 [
                     'name' => get_string('loginurl', 'enrol_lti'),
                     'url' => $CFG->wwwroot . '/enrol/poodlllti/login.php?id=' . $registration->get_uniqueid(),
-                    'id' => uniqid()
+                    'id' => uniqid(),
                 ],
                 [
                     'name' => get_string('deeplinkingurl', 'enrol_lti'),
-                    'url' => $CFG->wwwroot . '/enrol/poodlllti/launch_deeplink.php',
-                    'id' => uniqid()
+                    'url' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
+                    'id' => uniqid(),
                 ],
                 [
                     'name' => get_string('redirectionuris', 'mod_lti'),
-                    'url' => join(PHP_EOL, [
-                        $CFG->wwwroot . '/enrol/poodlllti/launch.php',
-                        $CFG->wwwroot . '/enrol/poodlllti/launch_deeplink.php',
-                    ]),
+                    'url' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
                     'id' => uniqid(),
-                    'islongtext' => true,
                 ],
             ];
             $mform->addElement('html', $OUTPUT->render_from_template(
@@ -429,7 +450,9 @@ class edit extends dynamic_form {
             $buttonarray[0] = $mform->createElement('submit', 'submitbutton', $submitbutton ?? get_string('savechanges'));
         }
 
+        $mform->closeHeaderBefore('buttongroup');
         $mform->addGroup($buttonarray, 'buttongroup', '', [' '], false);
+        $mform->applyFilter('__ALL__', 'trim');
     }
 
     public function param(string $name, $default = null, $type = null) {

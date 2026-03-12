@@ -64,7 +64,7 @@
                 <td class="col-9">
                     <div class="input-group col-md-6 ms-0 ps-0">
                         {{#islongtext}}
-                            <textarea style="resize: none;" class="form-control" id="lti_tool_endpoint_url_{{id}}" readonly>{{!
+                            <textarea style="resize: none;" class="form-control" id="lti_tool_endpoint_url_{{id}}" {{#rows}}rows="{{{ . }}}"{{/rows}} readonly>{{!
                                 }}{{{ url }}}{{!
                             }}</textarea>
                         {{/islongtext}}

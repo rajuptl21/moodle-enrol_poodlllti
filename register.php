@@ -31,6 +31,7 @@ use enrol_lti\local\ltiadvantage\repository\user_repository;
 use enrol_lti\local\ltiadvantage\service\application_registration_service;
 use enrol_poodlllti\form\platform\edit;
 use enrol_poodlllti\local\platform;
+use Packback\Lti1p3\LtiConstants;
 
 require_once(dirname(__FILE__, 3).'/config.php');
 global $OUTPUT, $PAGE, $CFG, $SITE;
@@ -85,10 +86,10 @@ $wwwrooturl = $CFG->wwwroot;
 $parsed = parse_url($wwwrooturl);
 $sitefullname = format_string(get_site()->fullname);
 $scopes = [
-    'https://purl.imsglobal.org/spec/lti-ags/scope/lineitem',
-    'https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly',
-    'https://purl.imsglobal.org/spec/lti-ags/scope/score',
-    'https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly',
+    LtiConstants::AGS_SCOPE_LINEITEM,
+    LtiConstants::AGS_SCOPE_RESULT_READONLY,
+    LtiConstants::AGS_SCOPE_SCORE,
+    LtiConstants::NRPS_SCOPE_MEMBERSHIP_READONLY,
 ];
 
 $regrequest = (object) [
@@ -98,7 +99,6 @@ $regrequest = (object) [
     'initiate_login_uri' => $CFG->wwwroot . '/enrol/poodlllti/login.php?id=' . $draftreg->get_uniqueid(),
     'redirect_uris' => [
         $CFG->wwwroot . '/enrol/poodlllti/launch.php',
-        $CFG->wwwroot . '/enrol/poodlllti/launch_deeplink.php',
     ],
      // TODO: Consider whether to support client_name#ja syntax for multi language support - see MDL-73109.
     'client_name' => format_string($SITE->fullname, true, ['context' => system::instance()]),
@@ -120,9 +120,9 @@ $regrequest = (object) [
         ],
         'messages' => [
             (object) [
-                'type' => 'LtiDeepLinkingRequest',
+                'type' => LtiConstants::MESSAGE_TYPE_DEEPLINK,
                 'allowLearner' => false,
-                'target_link_uri' => $CFG->wwwroot . '/enrol/poodlllti/launch_deeplink.php',
+                'target_link_uri' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
                  // TODO: Consider whether to support label#ja syntax for multi language support - see MDL-73109.
                 'label' => get_string('registrationdeeplinklabel', 'enrol_lti', $sitefullname),
                 'placements' => [
@@ -130,7 +130,7 @@ $regrequest = (object) [
                 ],
             ],
             (object) [
-                'type' => 'LtiResourceLinkRequest',
+                'type' => LtiConstants::MESSAGE_TYPE_RESOURCE,
                 'allowLearner' => true,
                 'target_link_uri' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
                 // TODO: Consider whether to support label#ja syntax for multi language support - see MDL-73109.

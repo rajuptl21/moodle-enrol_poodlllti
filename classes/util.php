@@ -18,8 +18,10 @@ namespace enrol_poodlllti;
 
 use context_system;
 use core\task\manager;
+use enrol_poodlllti\local\platform;
 use enrol_poodlllti\task\delete_platform;
 use lang_string;
+use Packback\Lti1p3\LtiConstants;
 
 /**
  * Class util
@@ -52,6 +54,13 @@ class util {
                 $data['accesstokenurl'] = $platformurl . '/mod/lti/token.php';
                 $data['authenticationrequesturl'] = $platformurl . '/mod/lti/auth.php';
                 break;
+            case self::PLATFORMTYPES['canvas']:
+                $data['platformid'] = $platformurl;
+                $data['jwksurl'] = $platformurl . '/api/lti/security/jwks';
+                $data['accesstokenurl'] = $platformurl . '/login/oauth2/token';
+                $data['authenticationrequesturl'] = $platformurl . '/api/lti/authorize_redirect';
+                break;
+
         }
         return $data;
     }
@@ -91,4 +100,59 @@ class util {
         }
         return false;
     }
+
+    public static function get_public_json_payload(platform $platform): array {
+        global $CFG;
+        $app = $platform->get_app();
+        $platformurl = $platform->get('platformurl');
+        $platformurl = rtrim($platformurl, '/');
+        $scopes = [
+            LtiConstants::AGS_SCOPE_LINEITEM,
+            LtiConstants::AGS_SCOPE_RESULT_READONLY,
+            LtiConstants::AGS_SCOPE_SCORE,
+            LtiConstants::NRPS_SCOPE_MEMBERSHIP_READONLY,
+            LtiConstants::AGS_SCOPE_LINEITEM_READONLY,
+            $platformurl . '/lti/public_jwk/scope/update',
+            $platformurl . '/lti/account_lookup/scope/show',
+            $platformurl . '/lti-ags/progress/scope/show',
+            $platformurl . '/lti/page_content/show',
+            'https://purl.imsglobal.org/spec/lti/scope/eula/user',
+            'https://purl.imsglobal.org/spec/lti/scope/eula/deployment',
+            'https://purl.imsglobal.org/spec/lti/scope/report',
+            'https://purl.imsglobal.org/spec/lti/scope/asset.readonly',
+            'https://purl.imsglobal.org/spec/lti/scope/noticehandlers',
+            'https://purl.imsglobal.org/spec/lti-reg/scope/registration',
+            'https://purl.imsglobal.org/spec/lti-reg/scope/registration.readonly',
+        ];
+
+        $jsonpayload = [
+            'title' => $platform->get('schoolname'),
+            'target_link_uri' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
+            'oidc_initiation_url' => $CFG->wwwroot . '/enrol/poodlllti/login.php?id=' . $app->get_uniqueid(),
+            'public_jwk_url' => $CFG->wwwroot . '/enrol/lti/jwks.php',
+            'scopes' => $scopes,
+            'extensions' => [
+                [
+                    'platform' => 'canvas.instructure.com',
+                    'privacy_level' => 'public',
+                    'settings' => [
+                        'placements' => [
+                            [
+                                'text' => $platform->get('schoolname'),
+                                'enabled' => true,
+                                'placement' => 'link_selection',
+                                'message_type' => LtiConstants::MESSAGE_TYPE_DEEPLINK,
+                                'target_link_uri' => $CFG->wwwroot . '/enrol/poodlllti/launch.php',
+                                'canvas_icon_class' => 'icon-lti',
+                                'selection_width' => 1024,
+                                'selection_height' => 768,
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+        ];
+        return $jsonpayload;
+    }
+
 }

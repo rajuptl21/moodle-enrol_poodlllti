@@ -41,7 +41,11 @@ class delete_platform extends adhoc_task {
     }
 
     public function execute() {
-        global $DB;
+        global $CFG, $DB, $PAGE;
+        require_once($CFG->dirroot . '/course/lib.php');
+
+        // Start output so deleting course notification not prints html.
+        $PAGE->initialise_theme_and_output();
 
         $data = $this->get_custom_data();
         if (empty($data->platformid)) {
